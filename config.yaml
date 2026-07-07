@@ -1,0 +1,10 @@
+spark:
+  app_name: tech-cost-platform
+  master: local[*]
+paths:
+  data: data
+  bronze: data/bronze
+  silver: data/silver
+  gold: data/gold
+  rules: config/rules
+  examples: examples
