@@ -12,10 +12,10 @@ pipeline:
 	$(PYTHON) -m tech_cost_platform.pipeline
 
 synth:
-	$(PYTHON) -m tech_cost_platform.pipeline --stage synth
+	$(PYTHON) -m tech_cost_platform.synth
 
 bronze:
-	$(PYTHON) -m tech_cost_platform.pipeline --stage bronze
+	$(PYTHON) -m tech_cost_platform.bronze
 
 silver:
 	$(PYTHON) -m tech_cost_platform.pipeline --stage silver

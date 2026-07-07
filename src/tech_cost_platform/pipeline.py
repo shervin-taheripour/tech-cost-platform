@@ -1,4 +1,4 @@
-"""No-op pipeline entrypoint for the scaffold packet."""
+"""Pipeline entrypoint with a real bronze stage and stub downstream stages."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
-from .spark import build_spark_session, repo_root
+from .bronze.ingest import ingest_bronze_sources
+from .spark import repo_root
 
 STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold")
 
@@ -72,24 +73,20 @@ def ensure_paths(config: RuntimeConfig, root: Path) -> dict[str, Path]:
 
 
 def run_pipeline(target_stage: str | None = None, config_path: Path | None = None) -> int:
-    """Run the scaffold pipeline end-to-end as a sequence of no-op stages."""
+    """Run the pipeline through the requested stage."""
     root = repo_root()
     config = load_config(config_path)
-    paths = ensure_paths(config, root)
+    ensure_paths(config, root)
 
-    spark = build_spark_session(
-        app_name=config.spark.app_name,
-        master=config.spark.master,
-        warehouse_dir=paths["data"] / "warehouse",
-    )
-    try:
-        print(f"[tech-cost-platform] spark={spark.version} delta=enabled")
-        for stage_name in resolve_stages(target_stage):
+    print("[tech-cost-platform] pipeline status=started")
+    for stage_name in resolve_stages(target_stage):
+        if stage_name == "bronze":
+            ingest_bronze_sources(config_path=config_path)
+            print("[tech-cost-platform] stage=bronze status=completed")
+        else:
             print(f"[tech-cost-platform] stage={stage_name} status=no-op")
-        print("[tech-cost-platform] pipeline status=completed")
-        return 0
-    finally:
-        spark.stop()
+    print("[tech-cost-platform] pipeline status=completed")
+    return 0
 
 
 def parse_args() -> argparse.Namespace:

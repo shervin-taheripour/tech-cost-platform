@@ -1,0 +1,2 @@
+gl_line_id,period,gl_account,cost_center_id,amount_eur,description
+GL-900001,2026-01,7000,,oops,Malformed fixture missing cost center and amount
