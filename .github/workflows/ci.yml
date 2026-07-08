@@ -34,5 +34,8 @@ jobs:
       - name: Lint
         run: make PYTHON=python lint
 
+      - name: Generate synthetic source data
+        run: make PYTHON=python synth
+
       - name: Test
         run: make PYTHON=python test
