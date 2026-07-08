@@ -8,6 +8,8 @@ synth:
 bronze:
   source_dir: "data/source"
   bronze_dir: "data/bronze"
+silver:
+  silver_dir: "data/silver"
 paths:
   data: data
   bronze: data/bronze

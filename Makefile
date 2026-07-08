@@ -18,7 +18,7 @@ bronze:
 	$(PYTHON) -m tech_cost_platform.bronze
 
 silver:
-	$(PYTHON) -m tech_cost_platform.pipeline --stage silver
+	$(PYTHON) -m tech_cost_platform.silver
 
 gold:
 	$(PYTHON) -m tech_cost_platform.pipeline --stage gold

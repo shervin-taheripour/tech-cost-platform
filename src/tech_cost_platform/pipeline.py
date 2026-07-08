@@ -1,4 +1,4 @@
-"""Pipeline entrypoint with a real bronze stage and stub downstream stages."""
+"""Pipeline entrypoint with real synth, bronze, and silver stages."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ import yaml
 from pydantic import BaseModel, Field
 
 from .bronze.ingest import ingest_bronze_sources
-from .spark import repo_root
+from .silver.build import build_silver_tables
+from .spark import build_spark_session, repo_root
+from .synth.generate import generate_source_exports
 
 STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold")
 
@@ -48,7 +50,7 @@ def load_config(config_path: Path | None = None) -> RuntimeConfig:
 
 
 def resolve_stages(target_stage: str | None) -> list[str]:
-    """Return the no-op stages to execute through the requested stage."""
+    """Return the stages to execute through the requested target."""
     if target_stage is None:
         return list(STAGE_SEQUENCE)
     if target_stage not in STAGE_SEQUENCE:
@@ -76,26 +78,54 @@ def run_pipeline(target_stage: str | None = None, config_path: Path | None = Non
     """Run the pipeline through the requested stage."""
     root = repo_root()
     config = load_config(config_path)
-    ensure_paths(config, root)
+    paths = ensure_paths(config, root)
+    stages = resolve_stages(target_stage)
+    shared_spark = None
+    warehouse_dir = paths["data"] / "warehouse"
 
     print("[tech-cost-platform] pipeline status=started")
-    for stage_name in resolve_stages(target_stage):
-        if stage_name == "bronze":
-            ingest_bronze_sources(config_path=config_path)
-            print("[tech-cost-platform] stage=bronze status=completed")
-        else:
-            print(f"[tech-cost-platform] stage={stage_name} status=no-op")
+    try:
+        if any(stage_name in {"bronze", "silver"} for stage_name in stages):
+            shared_spark = build_spark_session(
+                app_name=f"{config.spark.app_name}-pipeline",
+                master=config.spark.master,
+                warehouse_dir=warehouse_dir,
+            )
+
+        for stage_name in stages:
+            if stage_name == "synth":
+                generate_source_exports(config_path=config_path)
+                print("[tech-cost-platform] stage=synth status=completed")
+            elif stage_name == "bronze":
+                ingest_bronze_sources(
+                    config_path=config_path,
+                    spark=shared_spark,
+                    warehouse_dir=warehouse_dir,
+                )
+                print("[tech-cost-platform] stage=bronze status=completed")
+            elif stage_name == "silver":
+                build_silver_tables(
+                    config_path=config_path,
+                    spark=shared_spark,
+                    warehouse_dir=warehouse_dir,
+                )
+                print("[tech-cost-platform] stage=silver status=completed")
+            else:
+                print(f"[tech-cost-platform] stage={stage_name} status=no-op")
+    finally:
+        if shared_spark is not None:
+            shared_spark.stop()
     print("[tech-cost-platform] pipeline status=completed")
     return 0
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for the scaffold pipeline."""
-    parser = argparse.ArgumentParser(description="Run the scaffold tech cost pipeline.")
+    """Parse CLI arguments for the staged tech cost pipeline."""
+    parser = argparse.ArgumentParser(description="Run the staged tech cost pipeline.")
     parser.add_argument(
         "--stage",
         choices=STAGE_SEQUENCE,
-        help="Run the no-op pipeline through the selected stage.",
+        help="Run the pipeline through the selected stage.",
     )
     parser.add_argument(
         "--config",

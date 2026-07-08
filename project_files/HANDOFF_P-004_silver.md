@@ -7,6 +7,22 @@ CLI Thread: codex:silver
 ## Goal
 Build the silver layer on top of bronze Delta: clean and type-normalize, validate with data-quality checks, and join the source tables into conformed **fact** and **dimension** Delta tables that the allocation engine (P-006) will consume. Silver preserves the lineage keys from bronze and the reconciliation chain (GL total must still tie to `61813.95`). It does **not** allocate, apply drivers, compute residual, or author rules — it only produces clean, conformed, engine-ready inputs.
 
+## Start Here (read the current repo before planning)
+The repo at its current commit is the source of truth, not the receipts. Before writing anything, read the actual code:
+- `src/tech_cost_platform/spark.py` — the SparkSession/Delta bootstrap. **Reuse `build_spark_session()` exactly as-is; do not build your own session.** As of P-000-FIX it carries deliberate startup hardening (in-memory catalog, a Windows-only gateway-tempfile patch, UI off, `127.0.0.1` host). **Do not modify, remove, or "clean up" any of that config** — it is what makes the runtime not hang. Treat `spark.py` as do-not-touch for this packet.
+- `tests/conftest.py` — the shared test harness from P-003.1. It provides session-scoped, read-only `synth_data` and a **function-scoped** `bronze_ingest` factory that writes to a fresh per-call output dir. **Reuse these; add a `silver` factory in the same shape (see tests below).**
+- `src/tech_cost_platform/bronze/ingest.py` — note the `ingest_bronze_sources(...)` signature (`source_overrides` / `bronze_dir` / `warehouse_dir`); silver reads bronze Delta produced by it.
+- `src/tech_cost_platform/pipeline.py` — the staged entrypoint; you'll replace the no-op silver stage.
+- `config.yaml`, `Makefile`, `.github/workflows/ci.yml` — conventions to mirror; CI runs `make lint` + `make test` on a clean Linux checkout with **no** pre-staged data.
+
+Then read the P-001→P-003.1 receipts for context and carry-forward lessons, then execute this bundle to its stop-when.
+
+## Execution Rule (learned the hard way — non-negotiable)
+Spark cold-start on this machine takes ~80–110s per run; that is normal, not a hang. Because of that:
+- **The human runs the Spark tests in their own terminal**, not inside a CLI-thread turn. A thread that runs `make test` itself risks being cut off mid-run (token/turn limits) and reporting a false "hang." The thread's job is to **write the code and the tests**; the human executes the ~100s verification and reports results back.
+- When any Spark test is run, use a **generous timeout** (`--timeout=300` or higher). A healthy run is 80–110s; a tight timeout false-fails it. `pytest-timeout` is already configured (default 120s from P-000-FIX) — for silver's heavier runs, pass `--timeout=300` explicitly.
+- Do not interpret a long-running Spark test as broken. If unsure, let it run to completion or until the 300s timeout prints a stack trace.
+
 ## Repo Targets
 - `src/tech_cost_platform/silver/`:
   - `dq.py` — data-quality checks (native Spark aggregations; see constraints).
@@ -49,7 +65,8 @@ Checks run as native Spark aggregations on the driver-safe path (no UDFs). Each 
 
 ## Constraints / Guardrails
 - **compatibility:** reuse `spark.py`'s session (vendored jars). **Native Spark ops only — no Python UDFs on executors** (carry-forward from P-001/P-003 Windows worker friction). DQ and conformance expressed as DataFrame/SQL ops.
-- **offline / CI-safe tests (carry-forward from the P-003 CI failure):** silver tests must **not** depend on gitignored runtime output being pre-present on disk. A fresh CI checkout has no `data/source/` or `data/bronze/`. Tests must build their own inputs — generate synth + run bronze in a fixture/setup, or construct small bronze Delta fixtures directly — under a project-local gitignored path (e.g. `data/test-runs/…`), not OS temp. This is the exact gap that turned CI red on P-003; do not reintroduce it.
+- **Spark session lifecycle (hard rule — this caused a multi-hour hang in P-003.1):** use **one shared SparkSession for the whole test run** (session- or module-scoped fixture, reusing `spark.py`). Do **not** create or `.stop()` a SparkSession per test or inside any function-scoped fixture. Function-scoped isolation applies to **output directories only** (fresh `silver_dir`/`warehouse_dir` per test), never to the session. Creating a session per call hangs on Windows Spark/JVM startup.
+- **offline / CI-safe tests via the shared harness (do not reinvent):** silver tests must **not** depend on gitignored runtime output being pre-present on disk (a fresh CI checkout has no `data/source/`, `data/bronze/`, or `data/silver/`). Reuse the P-003.1 `tests/conftest.py` harness: consume the session-scoped read-only `synth_data` and the function-scoped `bronze_ingest` factory to get bronze inputs, and **add a `silver` factory** in the same shape — a function-scoped callable that builds silver into a fresh per-call `silver_dir`/`warehouse_dir` under the gitignored test workspace. Read-only upstream stays shared; every writing test gets its own isolated dir. This is the pattern that fixed the P-003 CI failure; match it, don't rebuild it.
 - **governed fixtures (do not alter):** consume bronze as produced by P-003; do not change `synth/` or bronze contracts. The GL total `61813.95` is a contract silver must preserve.
 - **style:** mirror repo conventions; Ruff clean; Pydantic v2 where a boundary contract is appropriate (DQ is the silver boundary).
 - **windows tests:** project-local paths under `data/`, construct rows via Spark SQL not Python-worker serialization, clean up after.
@@ -63,7 +80,8 @@ Checks run as native Spark aggregations on the driver-safe path (no UDFs). Each 
   - `make PYTHON=<py> silver` reads bronze Delta and writes the conformed fact + dimension Delta tables to `data/silver/`.
   - `make PYTHON=<py> pipeline` runs end-to-end with real synth→bronze→silver stages and a no-op gold stage, exits 0.
   - From a clean checkout (no pre-existing `data/`), the test suite builds its own inputs and passes — i.e. it will pass in GitHub Actions on Linux.
-- **required tests (`tests/test_silver.py`, offline, CI-safe):**
+- **verification split:** the thread may run `make lint` itself (fast). The **Spark suite (`make test`, `make silver`, `make pipeline`) is run by the human in-terminal** with `--timeout=300`, and results reported back — do not have the thread run these inside its turn (see Execution Rule). CI on Linux is the independent confirmation.
+- **required tests (`tests/test_silver.py`, offline, CI-safe — built on the shared `conftest.py` harness with a new function-scoped `silver` factory; one shared Spark session):**
   1. Conformed fact + dimension tables are produced and readable.
   2. PK uniqueness holds on every dimension and on `fact_gl_cost`.
   3. Join completeness: all FKs resolve except the intentional NULL `tower_id`, which is preserved (≥1 NULL-tower GL row survives).

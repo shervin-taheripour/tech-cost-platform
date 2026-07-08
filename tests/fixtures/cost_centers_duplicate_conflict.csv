@@ -1,0 +1,8 @@
+cost_center_id,cost_center_name,tower_id
+CC-BIZ-APPS,Business Applications,TWR-LABOR
+CC-BIZ-APPS,Business Apps Alternate,TWR-COMPUTE
+CC-CLOUD-COMPUTE,Cloud Compute,TWR-COMPUTE
+CC-CLOUD-STORAGE,Cloud Storage,TWR-STORAGE
+CC-LEGACY,Legacy Shared Services,
+CC-NETWORK-EDGE,Network Edge,TWR-NETWORK
+CC-PLATFORM-OPS,Platform Operations,TWR-LABOR
