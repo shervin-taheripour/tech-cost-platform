@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Mapping
+from uuid import uuid4
 
 from pyspark.sql import SparkSession
 
@@ -51,6 +53,79 @@ def configure_windows_hadoop(root: Path) -> str | None:
     return hadoop_home_str
 
 
+def configure_process_temp_dir(base_dir: Path) -> Path:
+    """Ensure the project-local PySpark gateway temp root exists."""
+    temp_path = base_dir.resolve()
+    temp_path.mkdir(parents=True, exist_ok=True)
+    return temp_path
+
+
+class GatewayTempfileProxy:
+    """Bypass Windows hangs in PySpark gateway tempfile creation."""
+
+    def __init__(self, module, default_dir: Path):
+        self._module = module
+        self._default_dir = default_dir.resolve()
+
+    def mkdtemp(self, suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        base_dir = Path(dir) if dir is not None else self._default_dir
+        base_dir.mkdir(parents=True, exist_ok=True)
+        candidate_prefix = prefix if prefix is not None else tempfile.gettempprefix()
+        candidate_suffix = suffix if suffix is not None else ""
+
+        while True:
+            candidate = base_dir / f"{candidate_prefix}{uuid4().hex}{candidate_suffix}"
+            try:
+                candidate.mkdir()
+                return str(candidate)
+            except FileExistsError:
+                continue
+
+    def mkstemp(
+        self,
+        suffix: str | None = None,
+        prefix: str | None = None,
+        dir: str | None = None,
+        text: bool = False,
+    ) -> tuple[int, str]:
+        base_dir = Path(dir) if dir is not None else self._default_dir
+        base_dir.mkdir(parents=True, exist_ok=True)
+        candidate_prefix = prefix if prefix is not None else tempfile.gettempprefix()
+        candidate_suffix = suffix if suffix is not None else ""
+
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOINHERIT"):
+            flags |= os.O_NOINHERIT
+        if not text and hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+
+        while True:
+            candidate = base_dir / f"{candidate_prefix}{uuid4().hex}{candidate_suffix}"
+            try:
+                fd = os.open(candidate, flags, 0o600)
+                return fd, str(candidate)
+            except FileExistsError:
+                continue
+
+    def __getattr__(self, name: str):
+        return getattr(self._module, name)
+
+
+def patch_pyspark_gateway_tempfiles(base_dir: Path) -> None:
+    """Patch PySpark's gateway tempfile helpers to use a safe Windows path."""
+    if os.name != "nt":
+        return
+
+    import pyspark.java_gateway as java_gateway
+
+    marker = str(base_dir.resolve())
+    if getattr(java_gateway, "_tech_cost_platform_temp_patch", None) == marker:
+        return
+
+    java_gateway.tempfile = GatewayTempfileProxy(tempfile, base_dir)
+    java_gateway._tech_cost_platform_temp_patch = marker
+
+
 def build_spark_session(
     *,
     app_name: str = "tech-cost-platform",
@@ -62,12 +137,15 @@ def build_spark_session(
     root = repo_root()
     warehouse_path = Path(warehouse_dir) if warehouse_dir is not None else root / "data" / "warehouse"
     local_dir = root / "data" / "spark-local"
+    temp_dir = warehouse_path.parent / "python-temp"
     delta_classpath = os.pathsep.join(resolve_delta_jars())
     hadoop_home = configure_windows_hadoop(root)
     python_executable = sys.executable
 
     warehouse_path.mkdir(parents=True, exist_ok=True)
     local_dir.mkdir(parents=True, exist_ok=True)
+    configure_process_temp_dir(temp_dir)
+    patch_pyspark_gateway_tempfiles(temp_dir)
 
     os.environ.setdefault("SPARK_LOCAL_HOSTNAME", "127.0.0.1")
     os.environ.setdefault("PYSPARK_PYTHON", python_executable)
@@ -78,6 +156,7 @@ def build_spark_session(
         .master(master)
         .config("spark.sql.extensions", DELTA_SQL_EXTENSIONS)
         .config("spark.sql.catalog.spark_catalog", DELTA_CATALOG)
+        .config("spark.sql.catalogImplementation", "in-memory")
         .config("spark.delta.logStore.class", DELTA_LOCAL_LOG_STORE)
         .config("spark.sql.warehouse.dir", str(warehouse_path.resolve()))
         .config("spark.local.dir", str(local_dir.resolve()))
@@ -89,6 +168,7 @@ def build_spark_session(
         .config("spark.pyspark.driver.python", python_executable)
         .config("spark.sql.shuffle.partitions", "1")
         .config("spark.ui.enabled", "false")
+        .config("spark.ui.showConsoleProgress", "false")
     )
 
     if hadoop_home is not None:
