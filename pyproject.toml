@@ -41,3 +41,9 @@ timeout_method = "thread"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+# Databricks notebooks: spark/dbutils/display are injected globals (F821);
+# imports are cell-local rather than top-of-file (E402); smoke-test cells
+# intentionally import without calling (F401); cell-local re-imports (F811).
+"notebooks/*.py" = ["E402", "F401", "F811", "F821"]
