@@ -6,13 +6,13 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
-from pyspark.sql import DataFrame, SparkSession
+from pydantic import BaseModel, ConfigDict
 
-from ..bronze.ingest import BronzeConfig, SparkConfig, resolve_directory
-from ..delta_io import write_delta_table_staged
-from ..spark import build_spark_session, repo_root
+from ..bronze.ingest import BronzeConfig, resolve_directory
+from ..delta_tables import write_delta_table
+from ..runtime import repo_root
 from .conform import SILVER_TABLE_NAMES, conform_bronze_tables, read_bronze_tables
 from .dq import SilverDQReport, run_silver_dq_checks, summarize_failed_checks
 
@@ -28,9 +28,8 @@ class SilverConfig(BaseModel):
 class SilverRuntimeConfig(BaseModel):
     """Minimal config required by the silver stage."""
 
-    spark: SparkConfig = Field(default_factory=SparkConfig)
-    bronze: BronzeConfig = Field(default_factory=BronzeConfig)
-    silver: SilverConfig = Field(default_factory=SilverConfig)
+    bronze: BronzeConfig = BronzeConfig()
+    silver: SilverConfig = SilverConfig()
 
 
 class SilverValidationError(ValueError):
@@ -61,14 +60,28 @@ def load_silver_config(config_path: Path | None = None) -> SilverRuntimeConfig:
     return SilverRuntimeConfig.model_validate(raw_config)
 
 
-def write_silver_tables(tables: dict[str, DataFrame], silver_dir: Path) -> dict[str, Path]:
-    """Write conformed silver tables to Delta via the shared staged-write helper."""
+SILVER_SORT_KEYS: dict[str, list[str]] = {
+    "dim_cost_center": ["cost_center_id"],
+    "dim_resource_tower": ["tower_id"],
+    "dim_application": ["app_id"],
+    "dim_business_unit": ["bu_id"],
+    "fact_gl_cost": ["gl_line_id"],
+    "fact_usage_metric": ["metric_id"],
+}
+
+
+def write_silver_tables(tables: dict[str, pa.Table], silver_dir: Path) -> dict[str, Path]:
+    """Write conformed silver tables to Delta."""
     silver_dir.mkdir(parents=True, exist_ok=True)
     output_paths: dict[str, Path] = {}
 
     for table_name in SILVER_TABLE_NAMES:
         output_path = silver_dir / table_name
-        output_paths[table_name] = write_delta_table_staged(tables[table_name], output_path)
+        output_paths[table_name] = write_delta_table(
+            tables[table_name],
+            output_path,
+            sort_columns=SILVER_SORT_KEYS[table_name],
+        )
 
     return output_paths
 
@@ -78,28 +91,13 @@ def build_silver_tables(
     config_path: Path | None = None,
     bronze_dir: str | Path | None = None,
     silver_dir: str | Path | None = None,
-    spark: SparkSession | None = None,
-    warehouse_dir: str | Path | None = None,
 ) -> SilverBuildResult:
     """Read bronze Delta, validate, conform, and write silver Delta outputs."""
     config = load_silver_config(config_path)
     resolved_bronze_dir = resolve_directory(bronze_dir or config.bronze.bronze_dir)
     resolved_silver_dir = resolve_directory(silver_dir or config.silver.silver_dir)
-    resolved_warehouse_dir = (
-        Path(warehouse_dir)
-        if warehouse_dir is not None
-        else resolved_silver_dir.parent / "warehouse"
-    )
-
-    owns_session = spark is None
-    active_spark = spark or build_spark_session(
-        app_name=f"{config.spark.app_name}-silver",
-        master=config.spark.master,
-        warehouse_dir=resolved_warehouse_dir,
-    )
-
     try:
-        bronze_tables = read_bronze_tables(active_spark, resolved_bronze_dir)
+        bronze_tables = read_bronze_tables(resolved_bronze_dir)
         conformance = conform_bronze_tables(bronze_tables)
         dq_report = run_silver_dq_checks(conformance)
         if not dq_report.passed:
@@ -108,9 +106,6 @@ def build_silver_tables(
         return SilverBuildResult(output_paths=output_paths, dq_report=dq_report)
     except FileNotFoundError as exc:
         raise SilverValidationError(str(exc)) from exc
-    finally:
-        if owns_session:
-            active_spark.stop()
 
 
 def parse_args() -> argparse.Namespace:

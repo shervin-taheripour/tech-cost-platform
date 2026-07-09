@@ -2,12 +2,7 @@ version_id: v2_named_users
 description: Divergence comparison cascade using named_users for app-to-business-unit allocation.
 created: "2026-07-09"
 gl_to_tower:
-  strategy: weighted
-  weights:
-    TWR-COMPUTE: 4
-    TWR-LABOR: 3
-    TWR-NETWORK: 2
-    TWR-STORAGE: 2
+  basis: cost_center_mapping
 tower_to_app:
   strategy: consumption
   metric_name: cpu_hours

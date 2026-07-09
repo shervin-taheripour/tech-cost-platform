@@ -1,13 +1,13 @@
-"""Native Spark data-quality checks for silver conformance."""
+"""Arrow-native data-quality checks for silver conformance."""
 
 from __future__ import annotations
 
+from collections import defaultdict
 from decimal import Decimal
-from typing import Sequence
+from typing import Iterable, Sequence
 
+import pyarrow as pa
 from pydantic import BaseModel, ConfigDict, Field
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
 
 from ..synth.generate import DEFAULT_GL_TOTAL_EUR
 from .conform import SilverConformanceResult
@@ -49,56 +49,63 @@ def _check(name: str, failure_count: int, detail: str | None = None) -> DQCheckR
     )
 
 
-def _duplicate_key_count(dataframe: DataFrame, key_columns: Sequence[str]) -> int:
-    return dataframe.groupBy(*key_columns).count().where(F.col("count") > 1).count()
+def _rows(table: pa.Table) -> list[dict[str, object]]:
+    return table.to_pylist()
+
+
+def _duplicate_key_count(rows: Iterable[dict[str, object]], key_columns: Sequence[str]) -> int:
+    counts: dict[tuple[object, ...], int] = defaultdict(int)
+    for row in rows:
+        counts[tuple(row[column_name] for column_name in key_columns)] += 1
+    return sum(1 for count in counts.values() if count > 1)
 
 
 def _conflicting_dimension_key_count(
-    dataframe: DataFrame, key_column: str, attribute_columns: Sequence[str]
+    rows: Iterable[dict[str, object]],
+    key_column: str,
+    attribute_columns: Sequence[str],
 ) -> int:
-    attribute_struct = F.struct(*[F.col(column_name) for column_name in attribute_columns])
-    return (
-        dataframe.groupBy(key_column)
-        .agg(F.countDistinct(attribute_struct).alias("variant_count"))
-        .where(F.col("variant_count") > 1)
-        .count()
-    )
+    variants_by_key: dict[object, set[tuple[object, ...]]] = defaultdict(set)
+    for row in rows:
+        variants_by_key[row[key_column]].add(tuple(row[column_name] for column_name in attribute_columns))
+    return sum(1 for variants in variants_by_key.values() if len(variants) > 1)
 
 
 def _anti_join_count(
-    left: DataFrame,
-    right: DataFrame,
+    left_rows: Iterable[dict[str, object]],
+    right_rows: Iterable[dict[str, object]],
     join_pairs: Sequence[tuple[str, str]],
     *,
     ignore_null_left_columns: Sequence[str] | None = None,
 ) -> int:
-    filtered_left = left
-    for column_name in ignore_null_left_columns or ():
-        filtered_left = filtered_left.where(F.col(column_name).isNotNull())
-
-    left_alias = filtered_left.alias("left")
-    right_alias = right.alias("right")
-    join_condition = None
-    for left_column, right_column in join_pairs:
-        candidate = F.col(f"left.{left_column}") == F.col(f"right.{right_column}")
-        join_condition = candidate if join_condition is None else join_condition & candidate
-
-    return left_alias.join(right_alias, join_condition, "left_anti").count()
-
-
-def _non_negative_count(dataframe: DataFrame, column_name: str) -> int:
-    return dataframe.where(F.col(column_name) < 0).count()
+    right_keys = {
+        tuple(row[right_column] for _, right_column in join_pairs)
+        for row in right_rows
+    }
+    failures = 0
+    for row in left_rows:
+        if any(row[column_name] is None for column_name in ignore_null_left_columns or ()):
+            continue
+        candidate = tuple(row[left_column] for left_column, _ in join_pairs)
+        if candidate not in right_keys:
+            failures += 1
+    return failures
 
 
-def _gl_total(dataframe: DataFrame) -> Decimal:
-    total = dataframe.selectExpr("CAST(sum(amount_eur) AS DECIMAL(18,2)) AS total").collect()[0]["total"]
-    return total if total is not None else Decimal("0.00")
+def _non_negative_count(rows: Iterable[dict[str, object]], column_name: str) -> int:
+    return sum(1 for row in rows if row[column_name] < 0)
+
+
+def _gl_total(rows: Iterable[dict[str, object]]) -> Decimal:
+    return sum((row["amount_eur"] for row in rows), start=Decimal("0.00"))
 
 
 def run_silver_dq_checks(conformance: SilverConformanceResult) -> SilverDQReport:
     """Run the silver DQ suite against conformed candidate and final tables."""
-    tables = conformance.tables
-    dimension_candidates = conformance.dimension_candidates
+    tables = {table_name: _rows(table) for table_name, table in conformance.tables.items()}
+    dimension_candidates = {
+        table_name: _rows(table) for table_name, table in conformance.dimension_candidates.items()
+    }
     gl_total = _gl_total(tables["fact_gl_cost"])
 
     checks = (
@@ -177,7 +184,7 @@ def run_silver_dq_checks(conformance: SilverConformanceResult) -> SilverDQReport
         _check(
             "fact_usage_metric_tower_to_app_from_fk",
             _anti_join_count(
-                tables["fact_usage_metric"].where(F.col("step") == "tower_to_app"),
+                (row for row in tables["fact_usage_metric"] if row["step"] == "tower_to_app"),
                 tables["dim_resource_tower"],
                 (("from_id", "tower_id"),),
             ),
@@ -185,7 +192,7 @@ def run_silver_dq_checks(conformance: SilverConformanceResult) -> SilverDQReport
         _check(
             "fact_usage_metric_tower_to_app_to_fk",
             _anti_join_count(
-                tables["fact_usage_metric"].where(F.col("step") == "tower_to_app"),
+                (row for row in tables["fact_usage_metric"] if row["step"] == "tower_to_app"),
                 tables["dim_application"],
                 (("to_id", "app_id"),),
             ),
@@ -193,7 +200,7 @@ def run_silver_dq_checks(conformance: SilverConformanceResult) -> SilverDQReport
         _check(
             "fact_usage_metric_app_to_bu_from_fk",
             _anti_join_count(
-                tables["fact_usage_metric"].where(F.col("step") == "app_to_bu"),
+                (row for row in tables["fact_usage_metric"] if row["step"] == "app_to_bu"),
                 tables["dim_application"],
                 (("from_id", "app_id"),),
             ),
@@ -201,7 +208,7 @@ def run_silver_dq_checks(conformance: SilverConformanceResult) -> SilverDQReport
         _check(
             "fact_usage_metric_app_to_bu_to_fk",
             _anti_join_count(
-                tables["fact_usage_metric"].where(F.col("step") == "app_to_bu"),
+                (row for row in tables["fact_usage_metric"] if row["step"] == "app_to_bu"),
                 tables["dim_business_unit"],
                 (("to_id", "bu_id"),),
             ),

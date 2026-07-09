@@ -1,6 +1,3 @@
-spark:
-  app_name: tech-cost-platform
-  master: local[*]
 synth:
   seed: 20260107
   period: "2026-01"

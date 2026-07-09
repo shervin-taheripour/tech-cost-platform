@@ -5,17 +5,20 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 from uuid import uuid4
 
 import pytest
-from pyspark.sql import SparkSession
 
 from tech_cost_platform.bronze.ingest import ingest_bronze_sources
 from tech_cost_platform.silver.build import SilverBuildResult, build_silver_tables
-from tech_cost_platform.spark import build_spark_session, repo_root
+from tech_cost_platform.runtime import repo_root
 from tech_cost_platform.synth.generate import DEFAULT_SYNTH_CONFIG, generate_source_exports
 from tech_cost_platform.synth.schema import SynthConfig
+
+if TYPE_CHECKING:
+    from tech_cost_platform.engine import AllocationResult
+    from tech_cost_platform.residual import ResidualReportResult
 
 
 @dataclass(frozen=True)
@@ -24,17 +27,13 @@ class BronzeRun:
 
     source_dir: Path
     bronze_dir: Path
-    warehouse_dir: Path
-    spark: SparkSession
 
     def ingest(self, *, source_overrides: Mapping[str, Path] | None = None) -> dict[str, Path]:
         """Run bronze ingest into this run's isolated directories."""
         return ingest_bronze_sources(
             source_dir=self.source_dir,
             bronze_dir=self.bronze_dir,
-            warehouse_dir=self.warehouse_dir,
             source_overrides=source_overrides,
-            spark=self.spark,
         )
 
 
@@ -45,17 +44,13 @@ class SilverRun:
     source_dir: Path
     bronze_dir: Path
     silver_dir: Path
-    warehouse_dir: Path
-    spark: SparkSession
 
     def ingest_bronze(self, *, source_overrides: Mapping[str, Path] | None = None) -> dict[str, Path]:
         """Prepare bronze inputs for this silver test run."""
         return ingest_bronze_sources(
             source_dir=self.source_dir,
             bronze_dir=self.bronze_dir,
-            warehouse_dir=self.warehouse_dir,
             source_overrides=source_overrides,
-            spark=self.spark,
         )
 
     def build_from_bronze(self) -> SilverBuildResult:
@@ -63,14 +58,135 @@ class SilverRun:
         return build_silver_tables(
             bronze_dir=self.bronze_dir,
             silver_dir=self.silver_dir,
-            warehouse_dir=self.warehouse_dir,
-            spark=self.spark,
         )
 
     def build(self, *, source_overrides: Mapping[str, Path] | None = None) -> SilverBuildResult:
         """Run bronze ingest and then build silver in this run's isolated directories."""
         self.ingest_bronze(source_overrides=source_overrides)
         return self.build_from_bronze()
+
+
+@dataclass(frozen=True)
+class EngineRun:
+    """Per-test engine sandbox with isolated bronze, silver, and gold write locations."""
+
+    source_dir: Path
+    bronze_dir: Path
+    silver_dir: Path
+    gold_dir: Path
+
+    def ingest_bronze(self, *, source_overrides: Mapping[str, Path] | None = None) -> dict[str, Path]:
+        """Prepare bronze inputs for this engine test run."""
+        return ingest_bronze_sources(
+            source_dir=self.source_dir,
+            bronze_dir=self.bronze_dir,
+            source_overrides=source_overrides,
+        )
+
+    def build_silver(self) -> SilverBuildResult:
+        """Build silver inputs for the allocation engine from this run's bronze data."""
+        return build_silver_tables(
+            bronze_dir=self.bronze_dir,
+            silver_dir=self.silver_dir,
+        )
+
+    def run_allocation(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "AllocationResult":
+        """Run the gold allocation engine from this run's prepared silver inputs."""
+        from tech_cost_platform.engine import run_allocation
+
+        return run_allocation(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+        source_overrides: Mapping[str, Path] | None = None,
+    ) -> "AllocationResult":
+        """Run bronze ingest, silver build, and gold allocation in this run."""
+        self.ingest_bronze(source_overrides=source_overrides)
+        self.build_silver()
+        return self.run_allocation(rule_version_id=rule_version_id, rules_dir=rules_dir)
+
+
+@dataclass(frozen=True)
+class ResidualRun:
+    """Per-test residual sandbox with isolated bronze, silver, and gold write locations."""
+
+    source_dir: Path
+    bronze_dir: Path
+    silver_dir: Path
+    gold_dir: Path
+
+    def ingest_bronze(self, *, source_overrides: Mapping[str, Path] | None = None) -> dict[str, Path]:
+        """Prepare bronze inputs for this residual test run."""
+        return ingest_bronze_sources(
+            source_dir=self.source_dir,
+            bronze_dir=self.bronze_dir,
+            source_overrides=source_overrides,
+        )
+
+    def build_silver(self) -> SilverBuildResult:
+        """Build silver inputs for residual reporting."""
+        return build_silver_tables(
+            bronze_dir=self.bronze_dir,
+            silver_dir=self.silver_dir,
+        )
+
+    def run_allocation(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "AllocationResult":
+        """Build gold allocation and residual inputs."""
+        from tech_cost_platform.engine import run_allocation
+
+        return run_allocation(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build_residual(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "ResidualReportResult":
+        """Build residual report outputs from prepared silver and gold inputs."""
+        from tech_cost_platform.residual import build_residual_outputs
+
+        return build_residual_outputs(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+        source_overrides: Mapping[str, Path] | None = None,
+    ) -> "ResidualReportResult":
+        """Run bronze, silver, gold, and residual reporting in this run."""
+        self.ingest_bronze(source_overrides=source_overrides)
+        self.build_silver()
+        self.run_allocation(rule_version_id=rule_version_id, rules_dir=rules_dir)
+        return self.build_residual(rule_version_id=rule_version_id, rules_dir=rules_dir)
 
 
 @pytest.fixture(scope="session")
@@ -96,25 +212,10 @@ def synth_data(test_workspace: Path) -> Path:
     return source_dir
 
 
-@pytest.fixture(scope="session")
-def spark(test_workspace: Path):
-    """Share one Spark session across bronze test runs to avoid startup churn."""
-    session = build_spark_session(
-        app_name="tech-cost-platform-tests",
-        warehouse_dir=test_workspace / "spark-session-warehouse",
-        extra_conf={"spark.local.dir": str((test_workspace / "spark-local").resolve())},
-    )
-    try:
-        yield session
-    finally:
-        session.stop()
-
-
 @pytest.fixture(name="bronze_tables")
 def fixture_bronze_tables(
     test_workspace: Path,
     synth_data: Path,
-    spark: SparkSession,
     request: pytest.FixtureRequest,
 ):
     """Return a factory that creates isolated bronze write sandboxes per call."""
@@ -131,8 +232,6 @@ def fixture_bronze_tables(
         return BronzeRun(
             source_dir=synth_data,
             bronze_dir=run_root / "bronze",
-            warehouse_dir=run_root / "warehouse",
-            spark=spark,
         )
 
     yield create_run
@@ -149,7 +248,6 @@ def bronze_ingest(bronze_tables):
 def fixture_silver(
     test_workspace: Path,
     synth_data: Path,
-    spark: SparkSession,
     request: pytest.FixtureRequest,
 ):
     """Return a factory that creates isolated silver write sandboxes per call."""
@@ -167,8 +265,62 @@ def fixture_silver(
             source_dir=synth_data,
             bronze_dir=run_root / "bronze",
             silver_dir=run_root / "silver",
-            warehouse_dir=run_root / "warehouse",
-            spark=spark,
+        )
+
+    yield create_run
+    shutil.rmtree(case_root, ignore_errors=True)
+
+
+@pytest.fixture(name="engine")
+def fixture_engine(
+    test_workspace: Path,
+    synth_data: Path,
+    request: pytest.FixtureRequest,
+):
+    """Return a factory that creates isolated engine write sandboxes per call."""
+    case_root = test_workspace / "engine" / request.node.name
+    shutil.rmtree(case_root, ignore_errors=True)
+    case_root.mkdir(parents=True, exist_ok=True)
+
+    run_index = 0
+
+    def create_run() -> EngineRun:
+        nonlocal run_index
+        run_index += 1
+        run_root = case_root / f"run-{run_index:02d}"
+        return EngineRun(
+            source_dir=synth_data,
+            bronze_dir=run_root / "bronze",
+            silver_dir=run_root / "silver",
+            gold_dir=run_root / "gold",
+        )
+
+    yield create_run
+    shutil.rmtree(case_root, ignore_errors=True)
+
+
+@pytest.fixture(name="residual")
+def fixture_residual(
+    test_workspace: Path,
+    synth_data: Path,
+    request: pytest.FixtureRequest,
+):
+    """Return a factory that creates isolated residual write sandboxes per call."""
+    case_root = test_workspace / "residual" / request.node.name
+    shutil.rmtree(case_root, ignore_errors=True)
+    case_root.mkdir(parents=True, exist_ok=True)
+
+    run_index = 0
+
+    def create_run() -> ResidualRun:
+        nonlocal run_index
+        run_index += 1
+        run_root = case_root / f"run-{run_index:02d}"
+        return ResidualRun(
+            source_dir=synth_data,
+            bronze_dir=run_root / "bronze",
+            silver_dir=run_root / "silver",
+            gold_dir=run_root / "gold",
         )
 
     yield create_run

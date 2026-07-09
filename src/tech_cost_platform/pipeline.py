@@ -9,18 +9,14 @@ import yaml
 from pydantic import BaseModel, Field
 
 from .bronze.ingest import ingest_bronze_sources
+from .engine import run_allocation
+from .residual import build_residual_outputs
+from .rules.registry import load_rules_config
+from .runtime import repo_root
 from .silver.build import build_silver_tables
-from .spark import build_spark_session, repo_root
 from .synth.generate import generate_source_exports
 
-STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold")
-
-
-class SparkConfig(BaseModel):
-    """Runtime Spark settings."""
-
-    app_name: str = "tech-cost-platform"
-    master: str = "local[*]"
+STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold", "residual")
 
 
 class PathsConfig(BaseModel):
@@ -37,7 +33,6 @@ class PathsConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Root config loaded from config.yaml."""
 
-    spark: SparkConfig = Field(default_factory=SparkConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
 
 
@@ -56,6 +51,10 @@ def resolve_stages(target_stage: str | None) -> list[str]:
     if target_stage not in STAGE_SEQUENCE:
         valid = ", ".join(STAGE_SEQUENCE)
         raise ValueError(f"Unknown stage '{target_stage}'. Expected one of: {valid}")
+    if target_stage == "gold":
+        return ["gold"]
+    if target_stage == "residual":
+        return ["residual"]
     return list(STAGE_SEQUENCE[: STAGE_SEQUENCE.index(target_stage) + 1])
 
 
@@ -78,43 +77,37 @@ def run_pipeline(target_stage: str | None = None, config_path: Path | None = Non
     """Run the pipeline through the requested stage."""
     root = repo_root()
     config = load_config(config_path)
+    rules_config = load_rules_config(config_path)
     paths = ensure_paths(config, root)
     stages = resolve_stages(target_stage)
-    shared_spark = None
-    warehouse_dir = paths["data"] / "warehouse"
 
     print("[tech-cost-platform] pipeline status=started")
-    try:
-        if any(stage_name in {"bronze", "silver"} for stage_name in stages):
-            shared_spark = build_spark_session(
-                app_name=f"{config.spark.app_name}-pipeline",
-                master=config.spark.master,
-                warehouse_dir=warehouse_dir,
+    for stage_name in stages:
+        if stage_name == "synth":
+            generate_source_exports(config_path=config_path)
+            print("[tech-cost-platform] stage=synth status=completed")
+        elif stage_name == "bronze":
+            ingest_bronze_sources(config_path=config_path)
+            print("[tech-cost-platform] stage=bronze status=completed")
+        elif stage_name == "silver":
+            build_silver_tables(config_path=config_path)
+            print("[tech-cost-platform] stage=silver status=completed")
+        elif stage_name == "gold":
+            run_allocation(
+                silver_dir=paths["silver"],
+                gold_dir=paths["gold"],
+                rule_version_id=rules_config.default_version,
+                rules_dir=rules_config.rules_dir,
             )
-
-        for stage_name in stages:
-            if stage_name == "synth":
-                generate_source_exports(config_path=config_path)
-                print("[tech-cost-platform] stage=synth status=completed")
-            elif stage_name == "bronze":
-                ingest_bronze_sources(
-                    config_path=config_path,
-                    spark=shared_spark,
-                    warehouse_dir=warehouse_dir,
-                )
-                print("[tech-cost-platform] stage=bronze status=completed")
-            elif stage_name == "silver":
-                build_silver_tables(
-                    config_path=config_path,
-                    spark=shared_spark,
-                    warehouse_dir=warehouse_dir,
-                )
-                print("[tech-cost-platform] stage=silver status=completed")
-            else:
-                print(f"[tech-cost-platform] stage={stage_name} status=no-op")
-    finally:
-        if shared_spark is not None:
-            shared_spark.stop()
+            print("[tech-cost-platform] stage=gold status=completed")
+        else:
+            build_residual_outputs(
+                silver_dir=paths["silver"],
+                gold_dir=paths["gold"],
+                rule_version_id=rules_config.default_version,
+                rules_dir=rules_config.rules_dir,
+            )
+            print("[tech-cost-platform] stage=residual status=completed")
     print("[tech-cost-platform] pipeline status=completed")
     return 0
 

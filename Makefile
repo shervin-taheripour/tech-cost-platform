@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: lint test pipeline synth bronze silver gold
+.PHONY: lint test pipeline synth bronze silver gold residual
 
 lint:
 	$(PYTHON) -m ruff check src tests
@@ -22,3 +22,6 @@ silver:
 
 gold:
 	$(PYTHON) -m tech_cost_platform.pipeline --stage gold
+
+residual:
+	$(PYTHON) -m tech_cost_platform.residual

@@ -13,6 +13,7 @@ NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 DateStr = Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$")]
 CascadeStepName = Literal["gl_to_tower", "tower_to_app", "app_to_bu"]
 StrategyName = Literal["even_spread", "weighted", "consumption", "manual_override"]
+GLToTowerBasis = Literal["cost_center_mapping"]
 CASCADE_STEP_NAMES: tuple[CascadeStepName, ...] = ("gl_to_tower", "tower_to_app", "app_to_bu")
 PROPORTION_TOLERANCE = Decimal("0.000001")
 
@@ -75,10 +76,34 @@ class ManualOverrideRule(RulesModel):
         return self
 
 
-StepRule = Annotated[
+StrategyRule = Annotated[
     EvenSpreadRule | WeightedRule | ConsumptionRule | ManualOverrideRule,
     Field(discriminator="strategy"),
 ]
+
+
+class GLToTowerRule(RulesModel):
+    """Mapping-first rule definition for the GL-to-tower step."""
+
+    basis: GLToTowerBasis
+    on_unmapped: StrategyRule | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_top_level_strategy(cls, data):
+        if isinstance(data, dict) and "strategy" in data:
+            raise ValueError(
+                "gl_to_tower is mapping-first; use on_unmapped for an explicit fallback strategy."
+            )
+        return data
+
+    @model_validator(mode="after")
+    def validate_on_unmapped(self) -> "GLToTowerRule":
+        if isinstance(self.on_unmapped, ConsumptionRule):
+            raise ValueError(
+                "gl_to_tower on_unmapped does not support consumption; synth emits no gl_to_tower usage metrics."
+            )
+        return self
 
 
 class RuleVersion(RulesModel):
@@ -87,12 +112,12 @@ class RuleVersion(RulesModel):
     version_id: NonEmptyStr
     description: NonEmptyStr
     created: DateStr
-    gl_to_tower: StepRule
-    tower_to_app: StepRule
-    app_to_bu: StepRule
+    gl_to_tower: GLToTowerRule
+    tower_to_app: StrategyRule
+    app_to_bu: StrategyRule
 
     @property
-    def steps(self) -> dict[CascadeStepName, StepRule]:
+    def steps(self) -> dict[CascadeStepName, GLToTowerRule | StrategyRule]:
         return {
             "gl_to_tower": self.gl_to_tower,
             "tower_to_app": self.tower_to_app,

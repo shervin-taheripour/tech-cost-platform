@@ -1,59 +1,63 @@
-"""Explicit Spark schemas for bronze CSV ingestion."""
+"""Explicit Arrow schemas for bronze CSV ingestion."""
 
 from __future__ import annotations
 
-from pyspark.sql.types import DecimalType, StringType, StructField, StructType
+import pyarrow as pa
 
-GL_COST_SCHEMA = StructType(
+from ..delta_tables import MONEY_TYPE
+
+STRING_TYPE = pa.string()
+
+GL_COST_SCHEMA = pa.schema(
     [
-        StructField("gl_line_id", StringType(), True),
-        StructField("period", StringType(), True),
-        StructField("gl_account", StringType(), True),
-        StructField("cost_center_id", StringType(), True),
-        StructField("amount_eur", DecimalType(18, 2), True),
-        StructField("description", StringType(), True),
+        ("gl_line_id", STRING_TYPE),
+        ("period", STRING_TYPE),
+        ("gl_account", STRING_TYPE),
+        ("cost_center_id", STRING_TYPE),
+        ("amount_eur", MONEY_TYPE),
+        ("description", STRING_TYPE),
     ]
 )
 
-COST_CENTER_SCHEMA = StructType(
+COST_CENTER_SCHEMA = pa.schema(
     [
-        StructField("cost_center_id", StringType(), True),
-        StructField("cost_center_name", StringType(), True),
-        StructField("tower_id", StringType(), True),
+        ("cost_center_id", STRING_TYPE),
+        ("cost_center_name", STRING_TYPE),
+        ("tower_id", STRING_TYPE),
     ]
 )
 
-RESOURCE_TOWER_SCHEMA = StructType(
+RESOURCE_TOWER_SCHEMA = pa.schema(
     [
-        StructField("tower_id", StringType(), True),
-        StructField("tower_name", StringType(), True),
-        StructField("tower_type", StringType(), True),
+        ("tower_id", STRING_TYPE),
+        ("tower_name", STRING_TYPE),
+        ("tower_type", STRING_TYPE),
     ]
 )
 
-APPLICATION_SCHEMA = StructType(
+APPLICATION_SCHEMA = pa.schema(
     [
-        StructField("app_id", StringType(), True),
-        StructField("app_name", StringType(), True),
-        StructField("business_criticality", StringType(), True),
+        ("app_id", STRING_TYPE),
+        ("app_name", STRING_TYPE),
+        ("business_criticality", STRING_TYPE),
     ]
 )
 
-BUSINESS_UNIT_SCHEMA = StructType(
+BUSINESS_UNIT_SCHEMA = pa.schema(
     [
-        StructField("bu_id", StringType(), True),
-        StructField("bu_name", StringType(), True),
+        ("bu_id", STRING_TYPE),
+        ("bu_name", STRING_TYPE),
     ]
 )
 
-USAGE_METRIC_SCHEMA = StructType(
+USAGE_METRIC_SCHEMA = pa.schema(
     [
-        StructField("metric_id", StringType(), True),
-        StructField("period", StringType(), True),
-        StructField("step", StringType(), True),
-        StructField("from_id", StringType(), True),
-        StructField("to_id", StringType(), True),
-        StructField("metric_name", StringType(), True),
-        StructField("value", DecimalType(18, 2), True),
+        ("metric_id", STRING_TYPE),
+        ("period", STRING_TYPE),
+        ("step", STRING_TYPE),
+        ("from_id", STRING_TYPE),
+        ("to_id", STRING_TYPE),
+        ("metric_name", STRING_TYPE),
+        ("value", MONEY_TYPE),
     ]
 )

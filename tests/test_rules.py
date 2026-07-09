@@ -12,6 +12,7 @@ from tech_cost_platform.rules.schema import CASCADE_STEP_NAMES
 from tech_cost_platform.synth.generate import DEFAULT_SYNTH_CONFIG, build_usage_metrics
 
 RULES_FIXTURE_PATH = Path("tests/fixtures/rules_malformed.yaml").resolve()
+GL_TO_TOWER_INVALID_STRATEGY_FIXTURE = Path("tests/fixtures/rules_gl_to_tower_invalid_bare_strategy.yaml").resolve()
 SHIPPED_VERSION_IDS = ("v1_transactions", "v2_named_users")
 KNOWN_STRATEGIES = {"even_spread", "weighted", "consumption", "manual_override"}
 
@@ -27,13 +28,7 @@ def build_valid_rule_payload(
         "description": "Valid rule payload for Spark-free tests.",
         "created": "2026-07-09",
         "gl_to_tower": {
-            "strategy": "weighted",
-            "weights": {
-                "TWR-COMPUTE": 4,
-                "TWR-LABOR": 3,
-                "TWR-NETWORK": 2,
-                "TWR-STORAGE": 2,
-            },
+            "basis": "cost_center_mapping",
         },
         "tower_to_app": {
             "strategy": "consumption",
@@ -65,7 +60,8 @@ def test_shipped_versions_load_with_exactly_three_cascade_steps() -> None:
     for version_id in SHIPPED_VERSION_IDS:
         version = registry.resolve(version_id)
         assert tuple(version.steps) == CASCADE_STEP_NAMES
-        assert version.gl_to_tower.strategy in KNOWN_STRATEGIES
+        assert version.gl_to_tower.basis == "cost_center_mapping"
+        assert version.gl_to_tower.on_unmapped is None
         assert version.tower_to_app.strategy in KNOWN_STRATEGIES
         assert version.app_to_bu.strategy in KNOWN_STRATEGIES
 
@@ -105,6 +101,43 @@ def test_loader_rejects_deliberately_malformed_fixture() -> None:
     assert "app_to_bu" in str(exc_info.value)
 
 
+def test_gl_to_tower_bare_strategy_fixture_is_rejected_with_guidance() -> None:
+    """The mapping-first step should reject legacy top-level split strategies clearly."""
+    with pytest.raises(RuleValidationError) as exc_info:
+        load_rule_version(GL_TO_TOWER_INVALID_STRATEGY_FIXTURE)
+
+    assert "gl_to_tower is mapping-first" in str(exc_info.value)
+    assert "on_unmapped" in str(exc_info.value)
+
+
+def test_gl_to_tower_on_unmapped_weighted_rule_loads(test_workspace: Path) -> None:
+    """A governed explicit fallback should remain available and versioned."""
+    payload = build_valid_rule_payload(version_id="gl_to_tower_weighted_fallback")
+    payload["gl_to_tower"] = {
+        "basis": "cost_center_mapping",
+        "on_unmapped": {
+            "strategy": "weighted",
+            "weights": {
+                "TWR-COMPUTE": 4,
+                "TWR-LABOR": 3,
+                "TWR-NETWORK": 2,
+                "TWR-STORAGE": 2,
+            },
+        },
+    }
+
+    fixture_path = write_rule_fixture(
+        test_workspace,
+        "gl_to_tower_weighted_fallback",
+        payload,
+    )
+    version = load_rule_version(fixture_path)
+
+    assert version.gl_to_tower.basis == "cost_center_mapping"
+    assert version.gl_to_tower.on_unmapped is not None
+    assert version.gl_to_tower.on_unmapped.strategy == "weighted"
+
+
 @pytest.mark.parametrize(
     ("case_name", "mutator", "expected_text"),
     [
@@ -142,7 +175,7 @@ def test_loader_rejects_deliberately_malformed_fixture() -> None:
         (
             "even_spread_metric_name",
             lambda payload: payload.update(
-                {"gl_to_tower": {"strategy": "even_spread", "metric_name": "cpu_hours"}}
+                {"tower_to_app": {"strategy": "even_spread", "metric_name": "cpu_hours"}}
             ),
             "metric_name",
         ),
@@ -150,6 +183,13 @@ def test_loader_rejects_deliberately_malformed_fixture() -> None:
             "extra_unknown_field",
             lambda payload: payload["app_to_bu"].update({"unexpected": "typo"}),
             "unexpected",
+        ),
+        (
+            "gl_to_tower_on_unmapped_consumption",
+            lambda payload: payload["gl_to_tower"].update(
+                {"on_unmapped": {"strategy": "consumption", "metric_name": "cpu_hours"}}
+            ),
+            "gl_to_tower on_unmapped does not support consumption",
         ),
     ],
 )

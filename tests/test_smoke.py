@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from importlib import import_module
 
-from tech_cost_platform.spark import build_spark_session
+import pyarrow as pa
+from deltalake import DeltaTable
+
+from tech_cost_platform.delta_tables import write_delta_table
 
 MODULES = [
     "tech_cost_platform",
-    "tech_cost_platform.spark",
+    "tech_cost_platform.runtime",
+    "tech_cost_platform.delta_tables",
     "tech_cost_platform.pipeline",
     "tech_cost_platform.synth",
     "tech_cost_platform.bronze",
@@ -28,21 +32,12 @@ def test_modules_import() -> None:
 
 
 def test_delta_round_trip(tmp_path) -> None:
-    """A Delta write/read round-trip proves the local Spark bootstrap is wired correctly."""
-    spark = build_spark_session(
-        app_name="tech-cost-platform-test",
-        warehouse_dir=tmp_path / "warehouse",
-    )
+    """A Delta write/read round-trip proves the local delta-rs runtime is wired correctly."""
     table_path = tmp_path / "delta-table"
+    table = pa.table({"id": [1], "status": ["ok"]})
 
-    try:
-        dataframe = spark.sql("SELECT 1 AS id, 'ok' AS status")
-        dataframe.write.format("delta").mode("overwrite").save(str(table_path))
+    write_delta_table(table, table_path, sort_columns=["id"])
 
-        rows = spark.read.format("delta").load(str(table_path)).collect()
+    rows = DeltaTable(str(table_path)).to_pyarrow_table().to_pylist()
 
-        assert len(rows) == 1
-        assert rows[0]["id"] == 1
-        assert rows[0]["status"] == "ok"
-    finally:
-        spark.stop()
+    assert rows == [{"id": 1, "status": "ok"}]

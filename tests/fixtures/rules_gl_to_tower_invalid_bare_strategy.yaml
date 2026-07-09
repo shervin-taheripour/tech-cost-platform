@@ -1,0 +1,14 @@
+version_id: invalid_gl_to_tower_strategy
+description: Deliberately invalid mapping-first rule that still carries a top-level split strategy.
+created: "2026-07-09"
+gl_to_tower:
+  strategy: weighted
+  weights:
+    TWR-COMPUTE: 4
+    TWR-LABOR: 3
+tower_to_app:
+  strategy: consumption
+  metric_name: cpu_hours
+app_to_bu:
+  strategy: consumption
+  metric_name: transactions

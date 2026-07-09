@@ -13,9 +13,10 @@ authors = [
   { name = "OpenAI Codex" }
 ]
 dependencies = [
-  "delta-spark==3.3.2",
+  "deltalake>=0.25,<1",
+  "duckdb>=1,<2",
   "pydantic>=2,<3",
-  "pyspark==3.5.8",
+  "pyarrow>=18,<22",
   "PyYAML>=6,<7",
 ]
 
