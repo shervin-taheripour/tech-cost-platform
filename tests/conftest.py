@@ -18,6 +18,7 @@ from tech_cost_platform.synth.schema import SynthConfig
 
 if TYPE_CHECKING:
     from tech_cost_platform.engine import AllocationResult
+    from tech_cost_platform.lineage import LineageBuildResult
     from tech_cost_platform.residual import ResidualReportResult
 
 
@@ -189,6 +190,95 @@ class ResidualRun:
         return self.build_residual(rule_version_id=rule_version_id, rules_dir=rules_dir)
 
 
+@dataclass(frozen=True)
+class LineageRun:
+    """Per-test lineage sandbox with isolated bronze, silver, gold, and example locations."""
+
+    source_dir: Path
+    bronze_dir: Path
+    silver_dir: Path
+    gold_dir: Path
+    examples_dir: Path
+
+    def ingest_bronze(self, *, source_overrides: Mapping[str, Path] | None = None) -> dict[str, Path]:
+        """Prepare bronze inputs for this lineage test run."""
+        return ingest_bronze_sources(
+            source_dir=self.source_dir,
+            bronze_dir=self.bronze_dir,
+            source_overrides=source_overrides,
+        )
+
+    def build_silver(self) -> SilverBuildResult:
+        """Build silver inputs for lineage reporting."""
+        return build_silver_tables(
+            bronze_dir=self.bronze_dir,
+            silver_dir=self.silver_dir,
+        )
+
+    def run_allocation(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "AllocationResult":
+        """Build gold allocation and residual inputs."""
+        from tech_cost_platform.engine import run_allocation
+
+        return run_allocation(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build_residual(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "ResidualReportResult":
+        """Build residual report outputs from prepared silver and gold inputs."""
+        from tech_cost_platform.residual import build_residual_outputs
+
+        return build_residual_outputs(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build_lineage(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "LineageBuildResult":
+        """Build lineage outputs from prepared silver, gold, and residual inputs."""
+        from tech_cost_platform.lineage import build_lineage_outputs
+
+        return build_lineage_outputs(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            examples_dir=self.examples_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+        source_overrides: Mapping[str, Path] | None = None,
+    ) -> "LineageBuildResult":
+        """Run bronze, silver, gold, residual, and lineage reporting in this run."""
+        self.ingest_bronze(source_overrides=source_overrides)
+        self.build_silver()
+        self.run_allocation(rule_version_id=rule_version_id, rules_dir=rules_dir)
+        self.build_residual(rule_version_id=rule_version_id, rules_dir=rules_dir)
+        return self.build_lineage(rule_version_id=rule_version_id, rules_dir=rules_dir)
+
+
 @pytest.fixture(scope="session")
 def test_workspace() -> Path:
     """Create a project-local gitignored workspace for the whole test session."""
@@ -321,6 +411,35 @@ def fixture_residual(
             bronze_dir=run_root / "bronze",
             silver_dir=run_root / "silver",
             gold_dir=run_root / "gold",
+        )
+
+    yield create_run
+    shutil.rmtree(case_root, ignore_errors=True)
+
+
+@pytest.fixture(name="lineage")
+def fixture_lineage(
+    test_workspace: Path,
+    synth_data: Path,
+    request: pytest.FixtureRequest,
+):
+    """Return a factory that creates isolated lineage write sandboxes per call."""
+    case_root = test_workspace / "lineage" / request.node.name
+    shutil.rmtree(case_root, ignore_errors=True)
+    case_root.mkdir(parents=True, exist_ok=True)
+
+    run_index = 0
+
+    def create_run() -> LineageRun:
+        nonlocal run_index
+        run_index += 1
+        run_root = case_root / f"run-{run_index:02d}"
+        return LineageRun(
+            source_dir=synth_data,
+            bronze_dir=run_root / "bronze",
+            silver_dir=run_root / "silver",
+            gold_dir=run_root / "gold",
+            examples_dir=run_root / "examples",
         )
 
     yield create_run

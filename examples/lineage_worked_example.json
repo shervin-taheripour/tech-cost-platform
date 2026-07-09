@@ -1,0 +1,68 @@
+{
+  "rule_version": "v1_transactions",
+  "rounding_note": "Terminal cents derive from staged rounding with deterministic remainder distribution. Proportions explain the split shape; allocated amounts are authoritative.",
+  "allocated_example": {
+    "gl_line_id": "GL-000009",
+    "gl_account": "7000",
+    "cost_center_id": "CC-CLOUD-COMPUTE",
+    "gl_amount_eur": "1957.99",
+    "gl_to_tower_basis": "cost_center_mapping",
+    "tower_to_app_driver": "cpu_hours",
+    "app_to_bu_driver": "transactions",
+    "paths": [
+      {
+        "gl_line_id": "GL-000009",
+        "tower_id": "TWR-COMPUTE",
+        "app_id": "APP-BILLING",
+        "bu_id": "BU-CORP",
+        "gl_amount_eur": "1957.99",
+        "prop_gl_to_tower": "1.000000000000",
+        "prop_tower_to_app": "0.320000000000",
+        "prop_app_to_bu": "0.100000000000",
+        "raw_product_eur": "62.65568000000000000000000000",
+        "rounded_terminal_amount_eur": "62.66",
+        "difference_from_raw_eur": "0.00432000000000000000000000"
+      },
+      {
+        "gl_line_id": "GL-000009",
+        "tower_id": "TWR-COMPUTE",
+        "app_id": "APP-BILLING",
+        "bu_id": "BU-RETAIL",
+        "gl_amount_eur": "1957.99",
+        "prop_gl_to_tower": "1.000000000000",
+        "prop_tower_to_app": "0.320000000000",
+        "prop_app_to_bu": "0.800000000000",
+        "raw_product_eur": "501.2454400000000000000000000",
+        "rounded_terminal_amount_eur": "501.24",
+        "difference_from_raw_eur": "-0.0054400000000000000000000"
+      },
+      {
+        "gl_line_id": "GL-000009",
+        "tower_id": "TWR-COMPUTE",
+        "app_id": "APP-BILLING",
+        "bu_id": "BU-WHOLESALE",
+        "gl_amount_eur": "1957.99",
+        "prop_gl_to_tower": "1.000000000000",
+        "prop_tower_to_app": "0.320000000000",
+        "prop_app_to_bu": "0.100000000000",
+        "raw_product_eur": "62.65568000000000000000000000",
+        "rounded_terminal_amount_eur": "62.65",
+        "difference_from_raw_eur": "-0.00568000000000000000000000"
+      }
+    ],
+    "terminal_total_eur": "626.55"
+  },
+  "residual_example": {
+    "gl_line_id": "GL-000025",
+    "gl_account": "7000",
+    "cost_center_id": "CC-LEGACY",
+    "gl_amount_eur": "1449.37",
+    "outcome": "residual",
+    "reason_code": "unmapped",
+    "failed_step": "gl_to_tower",
+    "tower_id": null,
+    "app_id": null,
+    "bu_id": null,
+    "terminal_amount_eur": "1449.37"
+  }
+}

@@ -10,13 +10,14 @@ from pydantic import BaseModel, Field
 
 from .bronze.ingest import ingest_bronze_sources
 from .engine import run_allocation
+from .lineage import build_lineage_outputs
 from .residual import build_residual_outputs
 from .rules.registry import load_rules_config
 from .runtime import repo_root
 from .silver.build import build_silver_tables
 from .synth.generate import generate_source_exports
 
-STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold", "residual")
+STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold", "residual", "lineage")
 
 
 class PathsConfig(BaseModel):
@@ -55,6 +56,8 @@ def resolve_stages(target_stage: str | None) -> list[str]:
         return ["gold"]
     if target_stage == "residual":
         return ["residual"]
+    if target_stage == "lineage":
+        return ["lineage"]
     return list(STAGE_SEQUENCE[: STAGE_SEQUENCE.index(target_stage) + 1])
 
 
@@ -101,13 +104,23 @@ def run_pipeline(target_stage: str | None = None, config_path: Path | None = Non
             )
             print("[tech-cost-platform] stage=gold status=completed")
         else:
-            build_residual_outputs(
-                silver_dir=paths["silver"],
-                gold_dir=paths["gold"],
-                rule_version_id=rules_config.default_version,
-                rules_dir=rules_config.rules_dir,
-            )
-            print("[tech-cost-platform] stage=residual status=completed")
+            if stage_name == "residual":
+                build_residual_outputs(
+                    silver_dir=paths["silver"],
+                    gold_dir=paths["gold"],
+                    rule_version_id=rules_config.default_version,
+                    rules_dir=rules_config.rules_dir,
+                )
+                print("[tech-cost-platform] stage=residual status=completed")
+            else:
+                build_lineage_outputs(
+                    silver_dir=paths["silver"],
+                    gold_dir=paths["gold"],
+                    examples_dir=paths["examples"],
+                    rule_version_id=rules_config.default_version,
+                    rules_dir=rules_config.rules_dir,
+                )
+                print("[tech-cost-platform] stage=lineage status=completed")
     print("[tech-cost-platform] pipeline status=completed")
     return 0
 

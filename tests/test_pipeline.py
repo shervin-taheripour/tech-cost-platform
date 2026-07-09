@@ -14,7 +14,7 @@ from tech_cost_platform.synth.generate import DEFAULT_GL_TOTAL_EUR
 
 
 def test_pipeline_runs_all_stages_with_default_rule_version(monkeypatch, test_workspace) -> None:
-    """Pipeline should execute synth through residual with repo-relative runtime paths."""
+    """Pipeline should execute synth through lineage with repo-relative runtime paths."""
     config = pipeline.RuntimeConfig()
     rules_config = RulesConfig()
     recorded_calls: list[tuple[str, object, object]] = []
@@ -51,10 +51,18 @@ def test_pipeline_runs_all_stages_with_default_rule_version(monkeypatch, test_wo
             ("residual", kwargs["rule_version_id"], kwargs["gold_dir"])
         ),
     )
+    monkeypatch.setattr(
+        pipeline,
+        "build_lineage_outputs",
+        lambda **kwargs: recorded_calls.append(
+            ("lineage", kwargs["rule_version_id"], kwargs["examples_dir"])
+        ),
+    )
 
     result = pipeline.run_pipeline()
 
     expected_gold_dir = test_workspace / config.paths.gold
+    expected_examples_dir = test_workspace / config.paths.examples
 
     assert result == 0
     assert recorded_calls[0] == ("synth", None, None)
@@ -62,6 +70,7 @@ def test_pipeline_runs_all_stages_with_default_rule_version(monkeypatch, test_wo
     assert ("silver", None, None) in recorded_calls
     assert ("gold", rules_config.default_version, expected_gold_dir) in recorded_calls
     assert ("residual", rules_config.default_version, expected_gold_dir) in recorded_calls
+    assert ("lineage", rules_config.default_version, expected_examples_dir) in recorded_calls
 
 
 def test_pipeline_gold_stage_runs_gold_only(monkeypatch, test_workspace) -> None:
@@ -100,6 +109,13 @@ def test_pipeline_gold_stage_runs_gold_only(monkeypatch, test_workspace) -> None
         "build_residual_outputs",
         lambda **kwargs: recorded_calls.append(
             ("residual", kwargs["rule_version_id"], kwargs["gold_dir"])
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_lineage_outputs",
+        lambda **kwargs: recorded_calls.append(
+            ("lineage", kwargs["rule_version_id"], kwargs["examples_dir"])
         ),
     )
 
@@ -149,6 +165,13 @@ def test_pipeline_residual_stage_runs_residual_only(monkeypatch, test_workspace)
             ("residual", kwargs["rule_version_id"], kwargs["gold_dir"])
         ),
     )
+    monkeypatch.setattr(
+        pipeline,
+        "build_lineage_outputs",
+        lambda **kwargs: recorded_calls.append(
+            ("lineage", kwargs["rule_version_id"], kwargs["examples_dir"])
+        ),
+    )
 
     result = pipeline.run_pipeline(target_stage="residual")
 
@@ -156,6 +179,60 @@ def test_pipeline_residual_stage_runs_residual_only(monkeypatch, test_workspace)
 
     assert result == 0
     assert recorded_calls == [("residual", rules_config.default_version, expected_gold_dir)]
+
+
+def test_pipeline_lineage_stage_runs_lineage_only(monkeypatch, test_workspace) -> None:
+    """Selecting the lineage stage should build lineage outputs only."""
+    config = pipeline.RuntimeConfig()
+    rules_config = RulesConfig()
+    recorded_calls: list[tuple[str, object, object]] = []
+
+    monkeypatch.setattr(pipeline, "repo_root", lambda: test_workspace)
+    monkeypatch.setattr(pipeline, "load_config", lambda config_path=None: config)
+    monkeypatch.setattr(pipeline, "load_rules_config", lambda config_path=None: rules_config)
+    monkeypatch.setattr(
+        pipeline,
+        "generate_source_exports",
+        lambda config_path=None: recorded_calls.append(("synth", config_path, None)),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "ingest_bronze_sources",
+        lambda **kwargs: recorded_calls.append(("bronze", kwargs.get("config_path"), kwargs.get("bronze_dir"))),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_silver_tables",
+        lambda **kwargs: recorded_calls.append(("silver", kwargs.get("config_path"), kwargs.get("silver_dir"))),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_allocation",
+        lambda **kwargs: recorded_calls.append(
+            ("gold", kwargs["rule_version_id"], kwargs["gold_dir"])
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_residual_outputs",
+        lambda **kwargs: recorded_calls.append(
+            ("residual", kwargs["rule_version_id"], kwargs["gold_dir"])
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_lineage_outputs",
+        lambda **kwargs: recorded_calls.append(
+            ("lineage", kwargs["rule_version_id"], kwargs["examples_dir"])
+        ),
+    )
+
+    result = pipeline.run_pipeline(target_stage="lineage")
+
+    expected_examples_dir = test_workspace / config.paths.examples
+
+    assert result == 0
+    assert recorded_calls == [("lineage", rules_config.default_version, expected_examples_dir)]
 
 
 def _write_runtime_config(path: Path) -> None:
