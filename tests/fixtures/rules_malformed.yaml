@@ -1,0 +1,11 @@
+version_id: malformed_missing_step
+description: Deliberately invalid rule fixture missing the final cascade step.
+created: "2026-07-09"
+gl_to_tower:
+  strategy: weighted
+  weights:
+    TWR-COMPUTE: 4
+    TWR-LABOR: 3
+tower_to_app:
+  strategy: consumption
+  metric_name: cpu_hours

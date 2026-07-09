@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tech_cost_platform import delta_io
 from tech_cost_platform.silver import build
 
 
@@ -40,10 +41,10 @@ class FakeDataFrame:
 def test_write_silver_tables_stages_then_moves_outputs(monkeypatch, test_workspace) -> None:
     """Silver writes should land in staging first and then move into the final target."""
     silver_dir = test_workspace / "silver-target"
-    staging_root = test_workspace / "staging-root"
+    staging_root = test_workspace / "_staging-root"
     tables = {table_name: FakeDataFrame() for table_name in build.SILVER_TABLE_NAMES}
 
-    monkeypatch.setattr(build, "build_silver_staging_root", lambda: staging_root)
+    monkeypatch.setattr(delta_io, "build_runtime_staging_root", lambda: staging_root)
 
     output_paths = build.write_silver_tables(tables, silver_dir)
 

@@ -5,7 +5,7 @@
 - Title: `Silver conformance layer`
 - Thread: `codex:silver`
 - Date: `2026-07-08`
-- Status: `Implemented and verified locally; clean-input pipeline and full test suite passed after Windows pipeline write-path hardening`
+- Status: `Implemented and verified locally; 2026-07-09 follow-up moved runtime staging to data/_staging and extracted a shared staged-write helper with lint/targeted checks green`
 
 ## Scope
 Build the silver layer on top of bronze Delta so the repo produces clean, typed, conformed fact and dimension Delta tables for downstream allocation work. Silver had to preserve bronze lineage keys and the governed GL reconciliation total `61813.95`, while staying strictly out of allocation, rules, residual, and engine scope.
@@ -30,13 +30,14 @@ The silver layer is now implemented with:
 - a real silver build entrypoint so `python -m tech_cost_platform.silver` runs the stage
 - pipeline wiring so `synth -> bronze -> silver` now runs for real while gold remains no-op
 - pipeline lifecycle hardening so bronze and silver share one Spark session inside a single `make pipeline` run
-- Windows-safe silver output handling that writes each Delta table to a staging directory under `data/test-runs/` and then moves the completed table into `data/silver/`
+- a shared runtime Delta write helper that stages under neutral gitignored runtime scratch space at `data/_staging/` and then moves the completed table into place
+- Windows-safe silver output handling that uses that shared helper for each table written into `data/silver/`
 - self-contained offline silver tests built on the shared P-003.1 fixture harness
 - a function-scoped `silver` factory in `tests/conftest.py` that reuses the shared Spark session and writes to isolated per-test dirs
 - a seeded-bad conflicting-duplicate fixture proving silver DQ actually fails on bad input
 - regression tests covering:
   - single-session pipeline orchestration
-  - staged silver output moves into the final target path
+  - staged runtime output moves into the final target path
 
 The packet stayed within scope:
 
@@ -51,6 +52,7 @@ The packet stayed within scope:
 ## Files Changed
 
 ### Added
+- `src/tech_cost_platform/delta_io.py`
 - `src/tech_cost_platform/silver/__main__.py`
 - `src/tech_cost_platform/silver/build.py`
 - `src/tech_cost_platform/silver/conform.py`
@@ -74,6 +76,13 @@ The packet stayed within scope:
   - Result: passed
 - `.\\.venv\\Scripts\\python.exe -m ruff check src tests`
   - Result: passed
+
+### Follow-up maintenance checks
+- `git grep -n "test-runs" -- src/`
+  - Result: no matches
+- `.\\.venv\\Scripts\\python.exe -m pytest tests\\test_silver_build.py tests\\test_pipeline.py -q`
+  - Result: passed
+  - Suite result: `2 passed`
 
 ### Human-run Spark verification
 Per the current P-004 handoff, the Spark-heavy commands were run in the human terminal rather than inside the CLI-thread turn.
@@ -118,6 +127,7 @@ Per the current P-004 handoff, the Spark-heavy commands were run in the human te
 
 ### Remaining Note
 - standalone `make silver` was not re-run separately after the final Windows write-path fix, although the same silver build path completed successfully inside `make pipeline`
+- the `2026-07-09` follow-up staging-path refactor was intentionally verified with lint + targeted non-Spark checks only; the human still re-runs `make pipeline`, `make silver`, and `make test` in-terminal per packet rule
 - GitHub Actions confirmation remains pending until the current state is pushed and CI runs
 
 ## Silver Behavior Implemented
@@ -136,8 +146,10 @@ Per the current P-004 handoff, the Spark-heavy commands were run in the human te
 - The silver tests follow the P-003.1 harness pattern exactly: one shared Spark session for the full run, read-only upstream synth data at session scope, and fresh per-test bronze/silver/warehouse output dirs for every writing test.
 - During human-run verification, `make pipeline` initially failed on Windows with `DELTA_CANNOT_CREATE_LOG_PATH` when Delta attempted to create `_delta_log` directly under the canonical runtime output paths. The final fix was twofold:
   - share one Spark session across bronze and silver inside pipeline execution
-  - stage silver Delta writes under `data/test-runs/` and move the completed table directories into `data/silver/`
+  - stage silver Delta writes and move the completed table directories into `data/silver/`
 - Diagnostic probes showed the issue was not silver-model-specific: trivial one-row Delta writes could succeed under the test harness workspace while failing under the canonical runtime output path, which is why the final workaround targeted the write path rather than the conformance logic.
+- The `2026-07-09` follow-up moved runtime staging out of the test harness scratch path into neutral runtime scratch space at `data/_staging/`, and extracted the write-then-move logic into shared helper `src/tech_cost_platform/delta_io.py` so the future gold layer can reuse the same Windows workaround.
+- `.gitignore` already covered the new staging root via `data/*`, so no ignore rule change was required.
 
 ## Reconciliation Lock
 - Silver DQ and tests assert that `sum(fact_gl_cost.amount_eur) == 61813.95`
@@ -146,9 +158,13 @@ Per the current P-004 handoff, the Spark-heavy commands were run in the human te
 ## Risks
 - Because Spark cold-start is intentionally slow on this machine, any verification run without a generous timeout risks a false failure.
 - Standalone `make silver` was not re-run separately after the final path fix, though the same build logic completed inside `make pipeline`.
+- After the `2026-07-09` refactor, the human still needs to re-run `make pipeline`, standalone `make silver`, and `make test` in-terminal to reconfirm the unchanged runtime behavior.
 - GitHub Actions has not yet confirmed the current packet state on Linux.
 
 ## Next Steps
-- Optionally re-run standalone `make PYTHON=.\\.venv\\Scripts\\python.exe silver` against freshly generated bronze if a target-specific confirmation is desired
+- Re-run:
+  - `make PYTHON=.\\.venv\\Scripts\\python.exe pipeline`
+  - `make PYTHON=.\\.venv\\Scripts\\python.exe silver`
+  - `$env:PYTEST_ADDOPTS='--timeout=300'; make PYTHON=.\\.venv\\Scripts\\python.exe test`
 - Push the current state and record the GitHub Actions result for the Dev Ledger
 - Carry the verified silver outputs forward into P-005 / P-006 work

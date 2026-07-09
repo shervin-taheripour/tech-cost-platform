@@ -10,6 +10,9 @@ bronze:
   bronze_dir: "data/bronze"
 silver:
   silver_dir: "data/silver"
+rules:
+  rules_dir: "config/rules"
+  default_version: "v1_transactions"
 paths:
   data: data
   bronze: data/bronze

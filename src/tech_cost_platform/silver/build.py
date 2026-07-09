@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 from pyspark.sql import DataFrame, SparkSession
 
 from ..bronze.ingest import BronzeConfig, SparkConfig, resolve_directory
+from ..delta_io import write_delta_table_staged
 from ..spark import build_spark_session, repo_root
 from .conform import SILVER_TABLE_NAMES, conform_bronze_tables, read_bronze_tables
 from .dq import SilverDQReport, run_silver_dq_checks, summarize_failed_checks
@@ -62,29 +61,14 @@ def load_silver_config(config_path: Path | None = None) -> SilverRuntimeConfig:
     return SilverRuntimeConfig.model_validate(raw_config)
 
 
-def build_silver_staging_root() -> Path:
-    """Return a project-local staging root for Windows-safe Delta writes."""
-    return repo_root() / "data" / "test-runs" / "silver-staging" / uuid4().hex[:8]
-
-
 def write_silver_tables(tables: dict[str, DataFrame], silver_dir: Path) -> dict[str, Path]:
-    """Write conformed silver tables to Delta via a staging directory."""
+    """Write conformed silver tables to Delta via the shared staged-write helper."""
     silver_dir.mkdir(parents=True, exist_ok=True)
-    staging_root = build_silver_staging_root()
-    staging_root.mkdir(parents=True, exist_ok=True)
     output_paths: dict[str, Path] = {}
 
-    try:
-        for table_name in SILVER_TABLE_NAMES:
-            output_path = silver_dir / table_name
-            staging_path = staging_root / table_name
-            shutil.rmtree(output_path, ignore_errors=True)
-            shutil.rmtree(staging_path, ignore_errors=True)
-            tables[table_name].write.format("delta").mode("overwrite").save(str(staging_path))
-            shutil.move(str(staging_path), str(output_path))
-            output_paths[table_name] = output_path
-    finally:
-        shutil.rmtree(staging_root, ignore_errors=True)
+    for table_name in SILVER_TABLE_NAMES:
+        output_path = silver_dir / table_name
+        output_paths[table_name] = write_delta_table_staged(tables[table_name], output_path)
 
     return output_paths
 
