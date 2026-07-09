@@ -18,6 +18,7 @@ from tech_cost_platform.synth.schema import SynthConfig
 
 if TYPE_CHECKING:
     from tech_cost_platform.engine import AllocationResult
+    from tech_cost_platform.gold import GoldReportsResult
     from tech_cost_platform.lineage import LineageBuildResult
     from tech_cost_platform.residual import ResidualReportResult
 
@@ -417,6 +418,105 @@ def fixture_residual(
     shutil.rmtree(case_root, ignore_errors=True)
 
 
+@dataclass(frozen=True)
+class GoldReportsRun:
+    """Per-test gold reports sandbox with isolated bronze, silver, gold, and example locations."""
+
+    source_dir: Path
+    bronze_dir: Path
+    silver_dir: Path
+    gold_dir: Path
+    examples_dir: Path
+
+    def ingest_bronze(self, *, source_overrides: Mapping[str, Path] | None = None) -> dict[str, Path]:
+        """Prepare bronze inputs for this gold reports test run."""
+        return ingest_bronze_sources(
+            source_dir=self.source_dir,
+            bronze_dir=self.bronze_dir,
+            source_overrides=source_overrides,
+        )
+
+    def build_silver(self) -> "SilverBuildResult":
+        """Build silver inputs for gold reports."""
+        return build_silver_tables(
+            bronze_dir=self.bronze_dir,
+            silver_dir=self.silver_dir,
+        )
+
+    def run_allocation(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "AllocationResult":
+        """Build gold allocation and residual inputs."""
+        from tech_cost_platform.engine import run_allocation
+
+        return run_allocation(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build_residual(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "ResidualReportResult":
+        """Build residual report outputs."""
+        from tech_cost_platform.residual import build_residual_outputs
+
+        return build_residual_outputs(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build_lineage(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+    ) -> "LineageBuildResult":
+        """Build lineage outputs."""
+        from tech_cost_platform.lineage import build_lineage_outputs
+
+        return build_lineage_outputs(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+            examples_dir=self.examples_dir,
+            rule_version_id=rule_version_id,
+            rules_dir=rules_dir,
+        )
+
+    def build_reports(self) -> "GoldReportsResult":
+        """Build gold report views from existing gold and silver data."""
+        from tech_cost_platform.gold import build_gold_reports
+
+        return build_gold_reports(
+            silver_dir=self.silver_dir,
+            gold_dir=self.gold_dir,
+        )
+
+    def build(
+        self,
+        *,
+        rule_version_id: str = "v1_transactions",
+        rules_dir: Path | None = None,
+        source_overrides: Mapping[str, Path] | None = None,
+    ) -> "GoldReportsResult":
+        """Run bronze, silver, gold, residual, lineage, and reports in this run."""
+        self.ingest_bronze(source_overrides=source_overrides)
+        self.build_silver()
+        self.run_allocation(rule_version_id=rule_version_id, rules_dir=rules_dir)
+        self.build_residual(rule_version_id=rule_version_id, rules_dir=rules_dir)
+        self.build_lineage(rule_version_id=rule_version_id, rules_dir=rules_dir)
+        return self.build_reports()
+
+
 @pytest.fixture(name="lineage")
 def fixture_lineage(
     test_workspace: Path,
@@ -435,6 +535,35 @@ def fixture_lineage(
         run_index += 1
         run_root = case_root / f"run-{run_index:02d}"
         return LineageRun(
+            source_dir=synth_data,
+            bronze_dir=run_root / "bronze",
+            silver_dir=run_root / "silver",
+            gold_dir=run_root / "gold",
+            examples_dir=run_root / "examples",
+        )
+
+    yield create_run
+    shutil.rmtree(case_root, ignore_errors=True)
+
+
+@pytest.fixture(name="gold_reports")
+def fixture_gold_reports(
+    test_workspace: Path,
+    synth_data: Path,
+    request: pytest.FixtureRequest,
+):
+    """Return a factory that creates isolated gold reports write sandboxes per call."""
+    case_root = test_workspace / "gold_reports" / request.node.name
+    shutil.rmtree(case_root, ignore_errors=True)
+    case_root.mkdir(parents=True, exist_ok=True)
+
+    run_index = 0
+
+    def create_run() -> GoldReportsRun:
+        nonlocal run_index
+        run_index += 1
+        run_root = case_root / f"run-{run_index:02d}"
+        return GoldReportsRun(
             source_dir=synth_data,
             bronze_dir=run_root / "bronze",
             silver_dir=run_root / "silver",

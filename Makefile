@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: lint test pipeline synth bronze silver gold residual lineage
+.PHONY: lint test pipeline synth bronze silver gold residual lineage reports
 
 lint:
 	$(PYTHON) -m ruff check src tests
@@ -28,3 +28,6 @@ residual:
 
 lineage:
 	$(PYTHON) -m tech_cost_platform.lineage
+
+reports:
+	$(PYTHON) -m tech_cost_platform.gold

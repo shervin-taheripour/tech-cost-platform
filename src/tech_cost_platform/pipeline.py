@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from .bronze.ingest import ingest_bronze_sources
 from .engine import run_allocation
+from .gold import build_gold_reports
 from .lineage import build_lineage_outputs
 from .residual import build_residual_outputs
 from .rules.registry import load_rules_config
@@ -17,7 +18,7 @@ from .runtime import repo_root
 from .silver.build import build_silver_tables
 from .synth.generate import generate_source_exports
 
-STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold", "residual", "lineage")
+STAGE_SEQUENCE = ("synth", "bronze", "silver", "gold", "residual", "lineage", "reports")
 
 
 class PathsConfig(BaseModel):
@@ -58,6 +59,8 @@ def resolve_stages(target_stage: str | None) -> list[str]:
         return ["residual"]
     if target_stage == "lineage":
         return ["lineage"]
+    if target_stage == "reports":
+        return ["reports"]
     return list(STAGE_SEQUENCE[: STAGE_SEQUENCE.index(target_stage) + 1])
 
 
@@ -112,7 +115,7 @@ def run_pipeline(target_stage: str | None = None, config_path: Path | None = Non
                     rules_dir=rules_config.rules_dir,
                 )
                 print("[tech-cost-platform] stage=residual status=completed")
-            else:
+            elif stage_name == "lineage":
                 build_lineage_outputs(
                     silver_dir=paths["silver"],
                     gold_dir=paths["gold"],
@@ -121,6 +124,13 @@ def run_pipeline(target_stage: str | None = None, config_path: Path | None = Non
                     rules_dir=rules_config.rules_dir,
                 )
                 print("[tech-cost-platform] stage=lineage status=completed")
+            else:
+                build_gold_reports(
+                    silver_dir=paths["silver"],
+                    gold_dir=paths["gold"],
+                    rules_dir=rules_config.rules_dir,
+                )
+                print("[tech-cost-platform] stage=reports status=completed")
     print("[tech-cost-platform] pipeline status=completed")
     return 0
 

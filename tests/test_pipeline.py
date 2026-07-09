@@ -58,10 +58,18 @@ def test_pipeline_runs_all_stages_with_default_rule_version(monkeypatch, test_wo
             ("lineage", kwargs["rule_version_id"], kwargs["examples_dir"])
         ),
     )
+    monkeypatch.setattr(
+        pipeline,
+        "build_gold_reports",
+        lambda **kwargs: recorded_calls.append(
+            ("reports", kwargs["silver_dir"], kwargs["gold_dir"])
+        ),
+    )
 
     result = pipeline.run_pipeline()
 
     expected_gold_dir = test_workspace / config.paths.gold
+    expected_silver_dir = test_workspace / config.paths.silver
     expected_examples_dir = test_workspace / config.paths.examples
 
     assert result == 0
@@ -71,6 +79,7 @@ def test_pipeline_runs_all_stages_with_default_rule_version(monkeypatch, test_wo
     assert ("gold", rules_config.default_version, expected_gold_dir) in recorded_calls
     assert ("residual", rules_config.default_version, expected_gold_dir) in recorded_calls
     assert ("lineage", rules_config.default_version, expected_examples_dir) in recorded_calls
+    assert ("reports", expected_silver_dir, expected_gold_dir) in recorded_calls
 
 
 def test_pipeline_gold_stage_runs_gold_only(monkeypatch, test_workspace) -> None:
