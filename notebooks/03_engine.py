@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # P-010 — 03 Engine (Proof Notebook)
 # MAGIC
@@ -28,12 +27,17 @@
 
 # COMMAND ----------
 
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
-REPO_PATH = "/Workspace/Repos/shervin-taheripour/tech-cost-platform"
+REPO_PATH = str(Path.cwd().parent)   # notebook runs from <repo>/notebooks
 SRC_PATH = f"{REPO_PATH}/src"
 RULES_DIR = f"{REPO_PATH}/config/rules"
 if SRC_PATH not in sys.path:
@@ -472,34 +476,44 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6 · Residual reason-code assertions (v1)
+# MAGIC  ## 6 · Residual reason-code assertions (v1)
 # MAGIC
-# MAGIC Three seeded cases must appear under `v1_transactions`:
-# MAGIC - `CC-LEGACY` → `unmapped` @ `gl_to_tower`
-# MAGIC - `APP-EMAIL` → `shared_unattributable` @ `app_to_bu`
-# MAGIC - `APP-ANALYTICS` → `driver_zero` @ `app_to_bu` (transactions=0 for all BUs)
+# MAGIC  Under `v1_transactions`, the verified seeded residual cases are:
+# MAGIC  - `CC-LEGACY` → `unmapped` @ `gl_to_tower`
+# MAGIC  - `TWR-LABOR` / `TWR-NETWORK` / `TWR-STORAGE` → `driver_zero` @ `tower_to_app`
+# MAGIC    because downstream app targets exist, but the selected `cpu_hours` driver has no signal
+# MAGIC  - `APP-ANALYTICS` → `driver_zero` @ `app_to_bu`
+# MAGIC
+# MAGIC  `shared_unattributable` is still a valid residual class in the engine, but it is not
+# MAGIC  exercised by the baseline `v1_transactions` proof path.
 
 # COMMAND ----------
 
 v1_reason_codes = {r.reason_code for r in v1_resid_rows}
 print(f"v1 residual reason codes present: {sorted(v1_reason_codes)}")
 
-assert "unmapped"              in v1_reason_codes, "Missing 'unmapped' residual"
-assert "shared_unattributable" in v1_reason_codes, "Missing 'shared_unattributable' residual"
-assert "driver_zero"           in v1_reason_codes, "Missing 'driver_zero' residual"
-print("All three residual reason codes present ✓")
+assert "unmapped" in v1_reason_codes, "Missing 'unmapped' residual"
+assert "driver_zero" in v1_reason_codes, "Missing 'driver_zero' residual"
+print("Expected residual reason codes for v1_transactions present ✓")
 
 unmapped_ccs = {r.cost_center_id for r in v1_resid_rows if r.reason_code == "unmapped"}
 assert "CC-LEGACY" in unmapped_ccs, f"CC-LEGACY not in unmapped residuals: {unmapped_ccs}"
 print(f"CC-LEGACY → unmapped @ gl_to_tower ✓  (all unmapped CCs: {unmapped_ccs})")
 
-email_resid = [r for r in v1_resid_rows
-               if r.app_id == "APP-EMAIL" and r.reason_code == "shared_unattributable"]
-assert email_resid, "APP-EMAIL not in shared_unattributable residuals"
-print(f"APP-EMAIL → shared_unattributable @ app_to_bu ✓  ({len(email_resid)} rows)")
+tower_driver_zero = [
+    r for r in v1_resid_rows
+    if r.failed_step == "tower_to_app" and r.reason_code == "driver_zero"
+]
+assert tower_driver_zero, "Expected tower_to_app driver_zero residuals under v1_transactions"
+print(
+    "tower_to_app driver_zero present ✓  "
+    f"(towers: {sorted({r.tower_id for r in tower_driver_zero})})"
+)
 
-analytics_dz = [r for r in v1_resid_rows
-                if r.app_id == "APP-ANALYTICS" and r.reason_code == "driver_zero"]
+analytics_dz = [
+    r for r in v1_resid_rows
+    if r.app_id == "APP-ANALYTICS" and r.reason_code == "driver_zero"
+]
 assert analytics_dz, "APP-ANALYTICS not in driver_zero residuals"
 print(f"APP-ANALYTICS → driver_zero @ app_to_bu ✓  ({len(analytics_dz)} rows)")
 

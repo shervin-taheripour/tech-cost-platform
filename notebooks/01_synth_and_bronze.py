@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # P-010 — 01 Synth & Bronze
 # MAGIC
@@ -19,8 +18,9 @@
 # COMMAND ----------
 
 import sys
+from pathlib import Path
 
-REPO_PATH = "/Workspace/Repos/shervin-taheripour/tech-cost-platform"
+REPO_PATH = str(Path.cwd().parent)   # notebook runs from <repo>/notebooks
 SRC_PATH = f"{REPO_PATH}/src"
 RULES_DIR = f"{REPO_PATH}/config/rules"
 if SRC_PATH not in sys.path:

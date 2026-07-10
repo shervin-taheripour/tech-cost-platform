@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # P-010 — 02 Silver
 # MAGIC
@@ -24,8 +23,9 @@
 
 import sys
 from decimal import Decimal
+from pathlib import Path
 
-REPO_PATH = "/Workspace/Repos/shervin-taheripour/tech-cost-platform"
+REPO_PATH = str(Path.cwd().parent)   # notebook runs from <repo>/notebooks
 SRC_PATH = f"{REPO_PATH}/src"
 if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
