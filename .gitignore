@@ -6,6 +6,7 @@ __pycache__/
 .pytest_tmp/
 pytest-cache-files-*/
 .ruff_cache/
+.coverage
 build/
 dist/
 
@@ -16,9 +17,11 @@ venv/
 # Local environment files
 .env
 
+# Process artifacts
+project_files/
+
 # Runtime data
-data/*
-!data/.gitkeep
+data/
 
 # OS/editor noise
 .DS_Store
